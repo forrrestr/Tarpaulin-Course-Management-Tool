@@ -9,6 +9,7 @@ from authlib.integrations.flask_client import OAuth
 from dotenv import load_dotenv
 import os
 
+
 load_dotenv()
 
 app = Flask(__name__)
@@ -27,6 +28,7 @@ TEXT_403 = {"Error": "You don't have permission on this resource"}
 TEXT_404 = {"Error": "Not found"}
 USERS = 'users'
 AVATAR = 'avatar'
+COURSES = 'courses'
 AVATAR_BUCKET = "hw6_roudebush_493"
 MY_URL = "https://hw6-493-roudebush.uc.r.appspot.com"
 
@@ -293,6 +295,95 @@ def get_avatar(user_id):
     blob.download_to_file(file_obj)
     file_obj.seek(0)
     return send_file(file_obj, mimetype='image/png')
+
+
+@app.route(f"/{COURSES}", methods=['POST'])
+def create_course():
+
+    try:
+        persona = verify_jwt(request)
+    except AuthError:
+        return TEXT_401, 401
+
+    query = client.query(kind=USERS)
+    query.add_filter('sub', '=', persona['sub'])
+    results = list(query.fetch())
+    if results[0].get('role') != 'admin':
+        return TEXT_403, 403
+
+    query = client.query(kind=USERS)
+    query.add_filter('role', '=', 'instructor')
+    instructor_role = list(query.fetch())
+    # print(instructor_role[0][0].get('sub'))
+    content = request.get_json()
+    found_instructor = False
+    for instructor in instructor_role:
+        if content['instructor_id'] == instructor.id:
+            found_instructor = True
+
+    if not found_instructor:
+        return TEXT_400, 400
+
+    field_names = ['subject', 'number', 'title', 'term', 'instructor_id']
+    missing_fields = [field for field in field_names if field not in content]
+
+    if missing_fields:
+        return TEXT_400, 400
+
+    new_course = datastore.Entity(key=client.key(COURSES))
+    new_course.update({
+        'subject': content['subject'],
+        'number': content['number'],
+        'title': content['title'],
+        'term': content['term'],
+        'instructor_id': content['instructor_id']
+    })
+    client.put(new_course)
+    new_course['id'] = new_course.key.id
+
+    return {
+        'subject': content['subject'],
+        'number': content['number'],
+        'title': content['title'],
+        'term': content['term'],
+        'instructor_id': content['instructor_id'],
+        'self': f"{MY_URL}/{COURSES}/{new_course['id']}",
+        'id': new_course.key.id,
+    }, 201
+
+
+@app.route('/' + COURSES, methods=['GET'])
+def get_all_businesses():
+    offset = request.args.get('offset', 0, type=int)
+    limit = request.args.get('limit', 3, type=int)
+
+    courses = []
+    query = client.query(kind=COURSES)
+    l_iterator = query.fetch(limit=3, offset=0)
+    pages = l_iterator.pages
+    results = list(next(pages))    
+    for r in results:
+        r['self'] = f"{MY_URL}/{COURSES}/{r.key.id}"
+        r['id'] = r.key.id
+        courses.append(r)
+    response = {"courses": courses}
+
+    if len(courses) == limit:
+        next_offset = offset + limit
+        response['next'] = f"{MY_URL}/{COURSES}?offset={next_offset}&limit={limit}"
+    return response
+
+
+@app.route('/' + COURSES + '/<int:id>', methods=['GET'])
+def get_a_business(id):
+    course_key = client.key(COURSES, id)
+    course = client.get(key=course_key)
+    if course is None:
+        return TEXT_404, 404
+    else:
+        course['id'] = course.key.id
+        course['self'] = f"{MY_URL}/{COURSES}/{course.key.id}"
+        return course, 200
 
 
 if __name__ == '__main__':
