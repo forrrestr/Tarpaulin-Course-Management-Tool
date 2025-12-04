@@ -353,7 +353,7 @@ def create_course():
 
 
 @app.route('/' + COURSES, methods=['GET'])
-def get_all_businesses():
+def get_all_courses():
     offset = request.args.get('offset', 0, type=int)
     limit = request.args.get('limit', 3, type=int)
 
@@ -375,7 +375,7 @@ def get_all_businesses():
 
 
 @app.route('/' + COURSES + '/<int:id>', methods=['GET'])
-def get_a_business(id):
+def get_a_course(id):
     course_key = client.key(COURSES, id)
     course = client.get(key=course_key)
     if course is None:
@@ -385,6 +385,39 @@ def get_a_business(id):
         course['self'] = f"{MY_URL}/{COURSES}/{course.key.id}"
         return course, 200
 
+
+@app.route('/' + COURSES + '/<int:id>', methods=['PUT'])
+def update_a_course(course_id):
+
+    try:
+        persona = verify_jwt(request)
+    except AuthError:
+        return TEXT_401, 401
+
+    query = client.query(kind=COURSES)
+    query.add_filter('id', '=', course_id)
+    results = list(query.fetch())
+    if not results:
+        return TEXT_403, 403
+    
+    query = client.query(kind=USERS)
+    query.add_filter('sub', '=', persona['sub'])
+    results = list(query.fetch())
+    if results[0].get('role') != 'admin':
+        return TEXT_403, 403
+
+    query = client.query(kind=USERS)
+    query.add_filter('role', '=', 'instructor')
+    instructor_role = list(query.fetch())
+    # print(instructor_role[0][0].get('sub'))
+    content = request.get_json()
+    found_instructor = False
+    for instructor in instructor_role:
+        if content['instructor_id'] == instructor.id:
+            found_instructor = True
+
+    if not found_instructor:
+        return TEXT_400, 400
 
 if __name__ == '__main__':
     app.run(host='127.0.0.1', port=5023, debug=True)
