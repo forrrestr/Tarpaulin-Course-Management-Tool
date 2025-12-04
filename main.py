@@ -1,5 +1,6 @@
-from flask import Flask, request, jsonify
-from google.cloud import datastore
+from flask import Flask, request, jsonify, send_file
+from google.cloud import datastore, storage
+import io
 import requests
 import json
 from six.moves.urllib.request import urlopen
@@ -25,6 +26,9 @@ TEXT_401 = {"Error": "Unauthorized"}
 TEXT_403 = {"Error": "You don't have permission on this resource"}
 TEXT_404 = {"Error": "Not found"}
 USERS = 'users'
+AVATAR = 'avatar'
+AVATAR_BUCKET = "hw6_roudebush_493"
+MY_URL = "https://hw6-493-roudebush.uc.r.appspot.com"
 
 auth0 = oauth.register(
     'auth0',
@@ -142,12 +146,12 @@ def login_user():
     r = requests.post(url, json=body, headers=headers)
     response = r.json()
 
-    if response.get('error_description') == "Wrong email or password.":
-        return TEXT_401, 401
-    else:
+    if r.status_code == 200:
         raw_token = response.get('id_token')
         token = {"token": raw_token}
         return token, 200
+    else:
+        return TEXT_401, 401
 
 
 @app.route('/' + USERS, methods=['GET'])
@@ -193,8 +197,102 @@ def get_a_users(user_id):
     else:
         if results[0].get('role') == 'instructor' or results[0].get('role') == 'student':
             user['courses'] = []
+        if user_has_avatar(user_id):
+            user['avatar_url'] = f"{MY_URL}/{USERS}/{user_id}/{AVATAR}"
         user['id'] = user.key.id
         return user, 200
+
+
+@app.route('/' + USERS + '/<int:user_id>' + '/' + AVATAR, methods=['POST'])
+def create_update_avatar(user_id):
+    if 'file' not in request.files:
+        return TEXT_400, 400
+
+    try:
+        persona = verify_jwt(request)
+    except AuthError:
+        return TEXT_401, 401
+
+    query = client.query(kind=USERS)
+    query.add_filter('sub', '=', persona['sub'])
+    results = list(query.fetch())
+
+    if not results or results[0].key.id != user_id:
+        return TEXT_403, 403
+
+    file_obj = request.files['file']
+    storage_client = storage.Client()
+    bucket = storage_client.get_bucket(AVATAR_BUCKET)
+    blob_name = f"{user_id}_avatar.png"
+    blob = bucket.blob(blob_name)
+    file_obj.seek(0)
+    blob.upload_from_file(file_obj, content_type='image/png')
+    avatar_url = f"{MY_URL}/{USERS}/{user_id}/{AVATAR}"
+    response = {'avatar_url': avatar_url}
+    return response, 200
+
+
+def user_has_avatar(user_id):
+    storage_client = storage.Client()
+    bucket = storage_client.get_bucket(AVATAR_BUCKET)
+    blob_name = f"{user_id}_avatar.png"
+    blob = bucket.blob(blob_name)
+
+    return blob.exists()
+
+
+@app.route(f"/{USERS}/<int:user_id>/{AVATAR}", methods=['DELETE'])
+def delete_avatar(user_id):
+
+    try:
+        persona = verify_jwt(request)
+    except AuthError:
+        return TEXT_401, 401
+
+    query = client.query(kind=USERS)
+    query.add_filter('sub', '=', persona['sub'])
+    results = list(query.fetch())
+
+    if not results or results[0].key.id != user_id:
+        return TEXT_403, 403
+
+    if not user_has_avatar(user_id):
+        return TEXT_404, 404
+
+    storage_client = storage.Client()
+    bucket = storage_client.get_bucket(AVATAR_BUCKET)
+    blob_name = f"{user_id}_avatar.png"
+    blob = bucket.blob(blob_name)
+    blob.delete()
+    return '', 204
+
+
+@app.route(f"/{USERS}/<int:user_id>/{AVATAR}", methods=['GET'])
+def get_avatar(user_id):
+
+    try:
+        persona = verify_jwt(request)
+    except AuthError:
+        return TEXT_401, 401
+
+    query = client.query(kind=USERS)
+    query.add_filter('sub', '=', persona['sub'])
+    results = list(query.fetch())
+
+    if not results or results[0].key.id != user_id:
+        return TEXT_403, 403
+
+    if not user_has_avatar(user_id):
+        return TEXT_404, 404
+
+    storage_client = storage.Client()
+    bucket = storage_client.get_bucket(AVATAR_BUCKET)
+    blob_name = f"{user_id}_avatar.png"
+    blob = bucket.blob(blob_name)
+    file_obj = io.BytesIO()
+    blob.download_to_file(file_obj)
+    file_obj.seek(0)
+    return send_file(file_obj, mimetype='image/png')
 
 
 if __name__ == '__main__':

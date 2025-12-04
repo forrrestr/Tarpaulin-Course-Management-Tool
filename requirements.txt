@@ -5,3 +5,4 @@ six
 requests
 authlib
 python-dotenv
+google-cloud-storage==2.18.2
