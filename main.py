@@ -29,8 +29,9 @@ TEXT_404 = {"Error": "Not found"}
 USERS = 'users'
 AVATAR = 'avatar'
 COURSES = 'courses'
+STUDENTS = 'student'
 AVATAR_BUCKET = "hw6_roudebush_493"
-MY_URL = "https://hw6-493-roudebush.uc.r.appspot.com"
+MY_URL = "http://127.0.0.1:5023"
 
 auth0 = oauth.register(
     'auth0',
@@ -314,7 +315,6 @@ def create_course():
     query = client.query(kind=USERS)
     query.add_filter('role', '=', 'instructor')
     instructor_role = list(query.fetch())
-    # print(instructor_role[0][0].get('sub'))
     content = request.get_json()
     found_instructor = False
     for instructor in instructor_role:
@@ -386,38 +386,87 @@ def get_a_course(id):
         return course, 200
 
 
-@app.route('/' + COURSES + '/<int:id>', methods=['PUT'])
-def update_a_course(course_id):
+@app.route('/' + COURSES + '/<int:id>', methods=['PATCH'])
+def update_a_course(id):
 
     try:
         persona = verify_jwt(request)
     except AuthError:
         return TEXT_401, 401
 
-    query = client.query(kind=COURSES)
-    query.add_filter('id', '=', course_id)
-    results = list(query.fetch())
-    if not results:
+    course_key = client.key(COURSES, int(id))
+    update_course = client.get(key=course_key)
+
+    if not update_course:
         return TEXT_403, 403
-    
+
     query = client.query(kind=USERS)
     query.add_filter('sub', '=', persona['sub'])
     results = list(query.fetch())
     if results[0].get('role') != 'admin':
         return TEXT_403, 403
 
-    query = client.query(kind=USERS)
-    query.add_filter('role', '=', 'instructor')
-    instructor_role = list(query.fetch())
-    # print(instructor_role[0][0].get('sub'))
     content = request.get_json()
-    found_instructor = False
-    for instructor in instructor_role:
-        if content['instructor_id'] == instructor.id:
-            found_instructor = True
+    if contains_instructor(content):
+        query = client.query(kind=USERS)
+        query.add_filter('role', '=', 'instructor')
+        instructor_role = list(query.fetch())
+        found_instructor = False
+        for instructor in instructor_role:
+            if content['instructor_id'] == instructor.id:
+                found_instructor = True
 
-    if not found_instructor:
-        return TEXT_400, 400
+        if not found_instructor:
+            return TEXT_400, 400
+
+    updatable_fields = ['subject', 'number', 'title', 'term', 'instructor_id']
+    for field in updatable_fields:
+        if field in content:
+            update_course.update({
+                field: content[field]
+            })
+            client.put(update_course)
+
+    return jsonify(update_course)
+
+
+def contains_instructor(content):
+    try:
+        content['instructor_id']
+    except:
+        return False
+
+    return True
+
+
+@app.route('/' + COURSES + '/<int:id>', methods=['DELETE'])
+def delete_businesses(id):
+
+    try:
+        persona = verify_jwt(request)
+    except AuthError:
+        return TEXT_401, 401
+
+    course_key = client.key(COURSES, id)
+    course = client.get(key=course_key)
+
+    query = client.query(kind=USERS)
+    query.add_filter('sub', '=', persona['sub'])
+    results = list(query.fetch())
+    if results[0].get('role') != 'admin':
+        return "not a admin", 403
+
+    if course is None:
+        return TEXT_403, 403
+    # else:
+    #     reviews_for_business = get_all_reviews_for_business(id)
+    #     if reviews_for_business:
+    #         for review in reviews_for_business:
+    #             review_key = client.key(REVIEWS, review['id'])
+    #             client.delete(review_key)
+    client.delete(course_key)
+    return '', 204
+
 
 if __name__ == '__main__':
     app.run(host='127.0.0.1', port=5023, debug=True)
