@@ -29,9 +29,10 @@ TEXT_404 = {"Error": "Not found"}
 USERS = 'users'
 AVATAR = 'avatar'
 COURSES = 'courses'
-STUDENTS = 'student'
+STUDENTS = 'students'
+ENROLLEMENT = 'enrollement'
 AVATAR_BUCKET = "hw6_roudebush_493"
-MY_URL = "http://127.0.0.1:5023"
+MY_URL = "https://hw6-493-roudebush.uc.r.appspot.com"
 
 auth0 = oauth.register(
     'auth0',
@@ -124,7 +125,7 @@ def verify_jwt(request):
 @app.route('/')
 def index():
     return "HW 6 submission for CS 493. " \
-            "This is the last assignment and this course has been fun."
+            "Thank you for a great quarter and class!"
 
 
 @app.route('/decode', methods=['GET'])
@@ -200,6 +201,20 @@ def get_a_users(user_id):
     else:
         if results[0].get('role') == 'instructor' or results[0].get('role') == 'student':
             user['courses'] = []
+            if results[0].get('role') == 'instructor':
+                query = client.query(kind=COURSES)
+                query.add_filter('instructor_id', '=', user_id)
+                results = list(query.fetch())
+                for course in results:
+                    course_id = course.key
+                    user['courses'].append(f"{MY_URL}/{COURSES}/{course_id}")
+            elif results[0].get('role') == 'student':
+                query = client.query(kind=ENROLLEMENT)
+                query.add_filter('student', '=', user_id)
+                results = list(query.fetch())
+                for course in results:
+                    course_id = course.get('course_id')
+                    user['courses'].append(f"{MY_URL}/{COURSES}/{course_id}")
         if user_has_avatar(user_id):
             user['avatar_url'] = f"{MY_URL}/{USERS}/{user_id}/{AVATAR}"
         user['id'] = user.key.id
@@ -359,6 +374,7 @@ def get_all_courses():
 
     courses = []
     query = client.query(kind=COURSES)
+    query.order = ['subject']
     l_iterator = query.fetch(limit=3, offset=0)
     pages = l_iterator.pages
     results = list(next(pages))    
@@ -440,7 +456,7 @@ def contains_instructor(content):
 
 
 @app.route('/' + COURSES + '/<int:id>', methods=['DELETE'])
-def delete_businesses(id):
+def delete_course(id):
 
     try:
         persona = verify_jwt(request)
@@ -454,18 +470,118 @@ def delete_businesses(id):
     query.add_filter('sub', '=', persona['sub'])
     results = list(query.fetch())
     if results[0].get('role') != 'admin':
-        return "not a admin", 403
+        return TEXT_403, 403
 
     if course is None:
         return TEXT_403, 403
-    # else:
-    #     reviews_for_business = get_all_reviews_for_business(id)
-    #     if reviews_for_business:
-    #         for review in reviews_for_business:
-    #             review_key = client.key(REVIEWS, review['id'])
-    #             client.delete(review_key)
+    else:
+        query = client.query(kind=ENROLLEMENT)
+        query.add_filter('course_id', '=', id)
+        results = list(query.fetch())
+        for course in results:
+            enrollment = results[0]
+            client.delete(enrollment.key)
+
     client.delete(course_key)
     return '', 204
+
+
+@app.route('/' + COURSES + '/<int:id>' + '/' + STUDENTS, methods=['PATCH'])
+def update_enrollment(id):
+
+    try:
+        persona = verify_jwt(request)
+    except AuthError:
+        return TEXT_401, 401
+
+    course_key = client.key(COURSES, id)
+    course = client.get(key=course_key)
+
+    if course is None:
+        return TEXT_403, 403
+
+    query = client.query(kind=USERS)
+    query.add_filter('sub', '=', persona['sub'])
+    results = list(query.fetch())
+    if results[0].get('id') != course['instructor_id'] and results[0].get('role') != 'admin':
+        return TEXT_403, 403
+
+    content = request.get_json()
+    add_individuals = content['add']
+    delete_individuals = content['remove']
+    for person in add_individuals:
+        if person in delete_individuals:
+            return {"Error": "Enrollment data is invalid"}, 409
+        user_key = client.key(USERS, person)
+        user = client.get(user_key)
+        if not user or user.get('role') != 'student':
+            return {"Error": "Enrollment data is invalid"}, 409
+
+    for person in delete_individuals:
+        if person in add_individuals:
+            return {"Error": "Enrollment data is invalid"}, 409
+        user_key = client.key(USERS, person)
+        user = client.get(user_key)
+        if not user or user.get('role') != 'student':
+            return {"Error": "Enrollment data is invalid"}, 409
+
+    add_student_to_enrollement(add_individuals, id, course['instructor_id'])
+    del_student_from_enrollement(delete_individuals, id)
+
+    return '', 200
+
+
+def add_student_to_enrollement(add_individuals, course_id, instructor):
+    for student in add_individuals:
+
+        query = client.query(kind=ENROLLEMENT)
+        query.add_filter('student', '=', student)
+        query.add_filter('course_id', '=', course_id)
+        results = list(query.fetch())
+
+        if not results:
+            new_enrollement = datastore.Entity(key=client.key(ENROLLEMENT))
+            new_enrollement.update({
+                'student': student,
+                'instructor': instructor,
+                'course_id': course_id
+            })
+            client.put(new_enrollement)
+            new_enrollement['id'] = new_enrollement.key.id
+
+
+def del_student_from_enrollement(delete_individuals, course_id):
+    for student in delete_individuals:
+        query = client.query(kind=ENROLLEMENT)
+        query.add_filter('student', '=', student)
+        query.add_filter('course_id', '=', course_id)
+        results = list(query.fetch())
+        if results:
+            enrollment = results[0]
+            client.delete(enrollment.key)
+
+
+@app.route('/' + COURSES + '/<int:id>' + '/' + STUDENTS, methods=['GET'])
+def get_enrollement_for_course(id):
+    try:
+        persona = verify_jwt(request)
+    except AuthError:
+        return TEXT_401, 401
+
+    course_key = client.key(COURSES, id)
+    course = client.get(key=course_key)
+
+    if course is None:
+        return TEXT_403, 403
+
+    query = client.query(kind=ENROLLEMENT)
+    query.add_filter('course_id', '=', id)
+    results = list(query.fetch())
+    enrollement = []
+    for student in results:
+        enrollement.append(student.get('student'))
+
+    return enrollement
 
 
 if __name__ == '__main__':
